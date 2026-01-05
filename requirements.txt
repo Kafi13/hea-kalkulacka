@@ -2,5 +2,5 @@ streamlit
 pandas
 altair
 numpy
-fpdf2
+python-docx
 matplotlib

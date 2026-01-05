@@ -6,7 +6,8 @@ import numpy as np
 import re
 from dataclasses import dataclass
 from enum import Enum
-from fpdf import FPDF
+from docx import Document
+from docx.shared import Inches
 import matplotlib.pyplot as plt
 import io
 
@@ -32,21 +33,12 @@ st.markdown("""
     .stAlert {
         padding: 10px;
     }
-    .reportview-container .main .block-container{
-        padding-top: 2rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
 # 2. DATABÁZE A STRUKTURY
 # =============================================================================
-class CrystalStructure(Enum):
-    BCC = "BCC (Tělesně středěná)"
-    FCC = "FCC (Plošně středěná)"
-    MIXED = "Směs fází (BCC + FCC)"
-    UNKNOWN = "Neurčeno / Intermetalická fáze"
-
 @dataclass
 class ElementData:
     symbol: str
@@ -58,8 +50,6 @@ class ElementData:
     density: float # Hustota (g/cm3)
     price: float   # Cena (CZK/kg - orientační odhad)
 
-# Databáze prvků (Zdroje: Griessen, Driessen, Takeuchi + ceny/hustoty)
-# Ceny jsou hrubé odhady pro akademické účely
 ELEMENTS_DB = {
     'Sc': ElementData('Sc', 1.64, 3, 1814, -90, -100, 2.99, 350000),
     'Y':  ElementData('Y', 1.80, 3, 1799, -79, -110, 4.47, 8500),
@@ -89,7 +79,6 @@ ELEMENTS_DB = {
     'Sn': ElementData('Sn', 1.62, 4, 505, 125, 40, 7.29, 700),
 }
 
-# Miedema model - Binární entalpie mísení
 BINARY_ENTHALPIES = {
     frozenset(['Ti', 'V']): 2,   frozenset(['Ti', 'Cr']): -7,  frozenset(['Ti', 'Mn']): -22,
     frozenset(['Ti', 'Fe']): -17, frozenset(['Ti', 'Co']): -28, frozenset(['Ti', 'Ni']): -35,
@@ -147,10 +136,8 @@ def get_binary_H(el1, el2):
 # 3. LOGIKA A VÝPOČTY
 # =============================================================================
 def parse_formula(notation: str) -> dict:
-    """Zpracuje vstupní řetězec na slovník složení."""
     notation = notation.strip().replace(" ", "")
     composition = {}
-    
     try:
         base_match = re.match(r'\(([A-Za-z]+)\)(\d+(?:\.\d+)?)', notation)
         if base_match:
@@ -175,30 +162,24 @@ def parse_formula(notation: str) -> dict:
             if el not in ELEMENTS_DB:
                 st.error(f"Chyba: Prvek '{el}' není v databázi.")
                 return None
-        
         total = sum(composition.values())
         return {k: v/total for k, v in composition.items()}
-
     except:
         return None
 
 def calculate_parameters(comp):
-    """Vypočítá všechny termodynamické parametry, hustotu a cenu."""
     elements = list(comp.keys())
     R = 8.31446
     
-    # Průměrné hodnoty
     r_bar = sum(comp[el] * ELEMENTS_DB[el].r for el in elements)
     Tm_avg = sum(comp[el] * ELEMENTS_DB[el].Tm for el in elements)
     VEC_avg = sum(comp[el] * ELEMENTS_DB[el].VEC for el in elements)
     H_inf = sum(comp[el] * ELEMENTS_DB[el].H_inf for el in elements)
     H_f = sum(comp[el] * ELEMENTS_DB[el].H_f for el in elements)
     
-    # Delta (rozdíl poloměrů)
     delta_sq = sum(comp[el] * (1 - ELEMENTS_DB[el].r / r_bar)**2 for el in elements)
     delta = 100 * math.sqrt(delta_sq)
     
-    # Entropie a Entalpie
     S_mix = -R * sum(c * math.log(c) for c in comp.values() if c > 0)
     H_mix = 0.0
     for i in range(len(elements)):
@@ -209,11 +190,6 @@ def calculate_parameters(comp):
     
     Omega = (Tm_avg * S_mix) / (abs(H_mix) * 1000) if abs(H_mix) > 0.001 else 9999.0
     
-    # Ekonomika a Hustota
-    # Odhad hmotnostních zlomků pro přesnější hustotu/cenu
-    total_mass = sum(comp[el] * 1 for el in elements) # Zjednodušeno (atomová hmotnost by byla lepší, ale stačí pro odhad) 
-    # Pro lepší přesnost potřebujeme atomové hmotnosti. Přidáme zástupné konstanty nebo použijeme hustotu jako proxy.
-    # Použijeme jednoduchý Rule of Mixtures na hustotu (nejběžnější v HEA papers pro odhad) a cenu.
     density_mix = sum(comp[el] * ELEMENTS_DB[el].density for el in elements)
     cost_mix = sum(comp[el] * ELEMENTS_DB[el].price for el in elements)
 
@@ -234,73 +210,67 @@ def get_prediction(res):
         return "⚠️ Intermetalické fáze", "warning"
 
 # =============================================================================
-# 4. EXPORT A PDF
+# 4. EXPORT WORD (DOCX)
 # =============================================================================
+def create_word_report(res, formula, comp):
+    doc = Document()
+    doc.add_heading('Laboratorní protokol - HEA Analýza', 0)
 
-class PDFReport(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 15)
-        self.cell(0, 10, 'Laboratorní protokol - HEA Analýza', 0, 1, 'C')
-        self.ln(5)
+    p = doc.add_paragraph()
+    p.add_run(f'Slitina: ').bold = True
+    p.add_run(f'{formula}\n')
+    p.add_run(f'Datum: ').bold = True
+    p.add_run(f'{pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}')
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Strana {self.page_no()}', 0, 0, 'C')
-
-def create_pdf(res, formula, comp):
-    pdf = PDFReport()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
+    doc.add_heading('Chemické složení', level=1)
+    table = doc.add_table(rows=1, cols=2)
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = 'Prvek'
+    hdr_cells[1].text = 'Koncentrace (at.%)'
     
-    # 1. Základní info
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, f"Slitina: {formula}", 0, 1)
-    pdf.set_font("Arial", size=11)
-    pdf.cell(0, 10, f"Datum: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", 0, 1)
-    pdf.ln(5)
+    for el, val in comp.items():
+        row_cells = table.add_row().cells
+        row_cells[0].text = el
+        row_cells[1].text = f"{val*100:.1f} %"
 
-    # 2. Složení
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Chemické složení:", 0, 1)
-    pdf.set_font("Arial", size=11)
-    comp_str = ", ".join([f"{el}: {val*100:.1f}%" for el, val in comp.items()])
-    pdf.multi_cell(0, 10, comp_str)
-    pdf.ln(5)
-
-    # 3. Výsledky
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Vypočtené parametry:", 0, 1)
-    pdf.set_font("Arial", size=11)
+    doc.add_heading('Vypočtené parametry', level=1)
+    table_res = doc.add_table(rows=1, cols=3)
+    hdr = table_res.rows[0].cells
+    hdr[0].text = 'Parametr'
+    hdr[1].text = 'Hodnota'
+    hdr[2].text = 'Jednotka'
     
     metrics = [
-        f"Entropie (S_mix): {res['S_mix']:.3f} J/K/mol",
-        f"Entalpie (H_mix): {res['H_mix']:.3f} kJ/mol",
-        f"Delta (size mismatch): {res['delta']:.2f} %",
-        f"Omega (stabilita): {res['Omega']:.2f}",
-        f"Valenční elektrony (VEC): {res['VEC']:.2f}",
-        f"Teplota tání (Tm): {res['Tm']:.0f} K",
-        f"Hustota (odhad): {res['Density']:.2f} g/cm3",
-        f"Cena materiálu: {res['Cost']:.0f} CZK/kg"
+        ("Entropie (S_mix)", res['S_mix'], "J/K/mol"),
+        ("Entalpie (H_mix)", res['H_mix'], "kJ/mol"),
+        ("Delta (size)", res['delta'], "%"),
+        ("Omega", res['Omega'], "-"),
+        ("Valenční elektrony (VEC)", res['VEC'], "-"),
+        ("Teplota tání (Tm)", res['Tm'], "K"),
+        ("Hustota", res['Density'], "g/cm³"),
+        ("Cena (CZK)", res['Cost'], "Kč/kg"),
+        ("H absorpce (H_inf)", res['H_inf'], "kJ/mol"),
+        ("Tvorba hydridu (H_f)", res['H_f'], "kJ/mol"),
     ]
     
-    for m in metrics:
-        pdf.cell(0, 8, m, 0, 1)
+    for label, val, unit in metrics:
+        row = table_res.add_row().cells
+        row[0].text = label
+        row[1].text = f"{val:.3f}"
+        row[2].text = unit
 
-    pdf.ln(5)
+    doc.add_heading('Závěr', level=1)
     pred_text, _ = get_prediction(res)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, f"Závěr predikce: {pred_text}", 0, 1)
+    doc.add_paragraph(f"Predikce fáze: {pred_text}")
     
-    # Poznámka k PDF
-    pdf.set_font("Arial", 'I', 9)
-    pdf.ln(10)
-    pdf.multi_cell(0, 5, "Pozn: Jedná se o teoretický výpočet modely Miedema, Yang-Zhang a Guo.")
-
-    return pdf.output(dest='S').encode('latin-1', 'replace')
+    # Save to BytesIO
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 # =============================================================================
-# 5. VIZUALIZACE (ASHBY, RADAR)
+# 5. VIZUALIZACE (RESTORED v2.0 + NEW)
 # =============================================================================
 def create_ashby_plot(res_list, labels):
     data = []
@@ -308,49 +278,68 @@ def create_ashby_plot(res_list, labels):
         data.append({"label": labels[i], "Omega": res['Omega'], "Delta": res['delta']})
     
     source = pd.DataFrame(data)
-    
     points = alt.Chart(source).mark_circle(size=200).encode(
         x=alt.X('Omega', scale=alt.Scale(domain=[0, max(2.0, max(d['Omega'] for d in data)+0.5)])),
         y=alt.Y('Delta', scale=alt.Scale(domain=[0, max(10, max(d['Omega'] for d in data)+2)]), title='Delta (%)'),
-        color='label',
-        tooltip=['label', 'Omega', 'Delta']
+        color='label', tooltip=['label', 'Omega', 'Delta']
     )
-    
     rect = alt.Chart(pd.DataFrame([{'x': 1.1, 'x2': 100, 'y': 0, 'y2': 6.6}])).mark_rect(
         color='green', opacity=0.1
     ).encode(x='x', x2='x2', y='y', y2='y2')
-    
     return (rect + points).properties(title="Ashbyho diagram stability", height=350)
 
+def create_heatmap(comp):
+    """Restored Heatmap from v2.0"""
+    elements = list(comp.keys())
+    data = []
+    for el1 in elements:
+        for el2 in elements:
+            if el1 != el2:
+                h = get_binary_H(el1, el2)
+                data.append({"Prvek 1": el1, "Prvek 2": el2, "H_mix": h})
+            else:
+                data.append({"Prvek 1": el1, "Prvek 2": el2, "H_mix": 0})
+    df = pd.DataFrame(data)
+    chart = alt.Chart(df).mark_rect().encode(
+        x='Prvek 1:N', y='Prvek 2:N',
+        color=alt.Color('H_mix:Q', scale=alt.Scale(scheme='redblue', domainMid=0), title="H_mix (kJ/mol)"),
+        tooltip=['Prvek 1', 'Prvek 2', 'H_mix']
+    ).properties(title="Matice interakcí (Modrá = Přitahování)", width=350, height=350)
+    return chart
+
+def create_property_chart(res):
+    """Restored Property Bar Chart from v2.0"""
+    data = pd.DataFrame([
+        {"Parametr": "Stabilita (Ω)", "Hodnota": min(res['Omega'], 5.0), "Norm": 1.1},
+        {"Parametr": "Velikost (δ %)", "Hodnota": res['delta'], "Norm": 6.6},
+        {"Parametr": "H-absorpce (-ΔH∞)", "Hodnota": -res['H_inf'] if res['H_inf'] < 0 else 0, "Norm": 20},
+    ])
+    chart = alt.Chart(data).mark_bar().encode(
+        x='Hodnota:Q', y='Parametr:N',
+        color=alt.condition(alt.datum.Hodnota > alt.datum.Norm, alt.value("green"), alt.value("steelblue"))
+    ).properties(title="Klíčové metriky")
+    return chart
+
 def create_radar_comparison(res1, label1, res2=None, label2=None):
-    # Normalizace pro radar chart (aby se vešly do grafu)
-    # Omega/5, Delta/10, VEC/12
-    
     def normalize(r):
         return [
             {"key": "Omega (x5)", "value": min(r['Omega'], 5.0), "max": 5.0},
             {"key": "Delta (x10)", "value": min(r['delta'], 10.0), "max": 10.0},
             {"key": "VEC (x12)", "value": min(r['VEC'], 12.0), "max": 12.0},
-            {"key": "Tm (x4000)", "value": min(r['Tm'], 4000)/400, "max": 10.0}, # Scaled down
-            {"key": "Cena (rel)", "value": min(math.log10(r['Cost']+1), 6), "max": 6.0} # Log scale
+            {"key": "Tm (x4000)", "value": min(r['Tm'], 4000)/400, "max": 10.0},
+            {"key": "Cena (rel)", "value": min(math.log10(r['Cost']+1), 6), "max": 6.0}
         ]
-
     data = []
     for item in normalize(res1):
         item['category'] = label1
         data.append(item)
-    
     if res2:
         for item in normalize(res2):
             item['category'] = label2
             data.append(item)
-            
     df = pd.DataFrame(data)
-    
     chart = alt.Chart(df).mark_line(point=True).encode(
-        x='key',
-        y='value',
-        color='category'
+        x='key', y='value', color='category'
     ).properties(title="Porovnání vlastností (Normalizováno)")
     return chart
 
@@ -362,14 +351,13 @@ def main():
     mode = st.sidebar.radio("Režim:", ["Jedna slitina", "Porovnání (A/B)"])
     
     st.title("HEA Kalkulačka Expert Pro 🔬")
-    st.caption("Verze 2.1 | Včetně ekonomické analýzy a PDF reportů")
+    st.caption("Verze 2.2 | Word Export & Full Scientific Dashboard")
     
     col1, col2 = st.columns(2)
-    
     formula1 = col1.text_input("Vzorec slitiny A:", "(TiVCr)95Ni5")
     formula2 = ""
     if mode == "Porovnání (A/B)":
-        formula2 = col2.text_input("Vzorec slitiny B (pro srovnání):", "Ti20V20Cr20Ni20Al20")
+        formula2 = col2.text_input("Vzorec slitiny B:", "Ti20V20Cr20Ni20Al20")
 
     if st.button("🚀 PROVÉST ANALÝZU", type="primary"):
         comp1 = parse_formula(formula1)
@@ -389,14 +377,20 @@ def main():
         if pred_type == "success": st.success(pred_text)
         else: st.warning(pred_text)
         
-        # Metriky A
+        # Kompletní metriky (Restored v2.0 + Econ)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Omega (Ω)", f"{res1['Omega']:.2f}")
         c2.metric("Delta (δ)", f"{res1['delta']:.2f}", "%")
-        c3.metric("Hustota", f"{res1['Density']:.2f}", "g/cm³")
-        c4.metric("Cena", f"{res1['Cost']:.0f}", "CZK/kg")
+        c3.metric("Entalpie (H_mix)", f"{res1['H_mix']:.2f}", "kJ/mol")
+        c4.metric("Entropie (S_mix)", f"{res1['S_mix']:.2f}", "J/K/mol")
 
-        # --- Výsledky Slitina B (pokud existuje) ---
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("VEC", f"{res1['VEC']:.2f}")
+        c6.metric("Teplota tání", f"{res1['Tm']:.0f}", "K")
+        c7.metric("H_inf (H-abs)", f"{res1['H_inf']:.2f}", "kJ/mol")
+        c8.metric("Cena", f"{res1['Cost']:.0f}", "CZK/kg")
+
+        # --- Výsledky Slitina B ---
         if res2:
             st.divider()
             st.subheader(f"Srovnání s: {formula2}")
@@ -410,29 +404,51 @@ def main():
             c3.metric("Hustota", f"{res2['Density']:.2f}", f"{res2['Density']-res1['Density']:.2f} g/cm³")
             c4.metric("Cena", f"{res2['Cost']:.0f}", f"{res2['Cost']-res1['Cost']:.0f} CZK", delta_color="inverse")
             
-            # Srovnávací grafy
             st.write("### ⚔️ Grafické srovnání")
             g1, g2 = st.columns(2)
-            with g1:
-                st.altair_chart(create_ashby_plot([res1, res2], [formula1, formula2]), use_container_width=True)
-            with g2:
-                st.altair_chart(create_radar_comparison(res1, formula1, res2, formula2), use_container_width=True)
+            with g1: st.altair_chart(create_ashby_plot([res1, res2], [formula1, formula2]), use_container_width=True)
+            with g2: st.altair_chart(create_radar_comparison(res1, formula1, res2, formula2), use_container_width=True)
+            
+            # Heatmaps comparison
+            st.write("### Matice Interakcí (Heatmaps)")
+            h1, h2 = st.columns(2)
+            with h1: 
+                st.write(f"**{formula1}**")
+                st.altair_chart(create_heatmap(comp1), use_container_width=True)
+            with h2: 
+                st.write(f"**{formula2}**")
+                st.altair_chart(create_heatmap(comp2), use_container_width=True)
 
         else:
-            # Grafy pouze pro A
-            res_list = [res1]
-            labels = [formula1]
-            st.altair_chart(create_ashby_plot(res_list, labels), use_container_width=True)
+            # Dashboard pro jednu slitinu (Restored v2.0 tabs)
+            st.write("### 📊 Detailní analýza")
+            tab1, tab2, tab3 = st.tabs(["Fázová stabilita", "Vlastnosti & Interakce", "Složení"])
             
-        # --- PDF Report ---
+            with tab1:
+                st.altair_chart(create_ashby_plot([res1], [formula1]), use_container_width=True)
+                st.info("Zelená oblast = Stabilní tuhý roztok.")
+            
+            with tab2:
+                col_h, col_p = st.columns([1, 1])
+                with col_h: st.altair_chart(create_heatmap(comp1), use_container_width=True)
+                with col_p: st.altair_chart(create_property_chart(res1), use_container_width=True)
+            
+            with tab3:
+                df_chart = pd.DataFrame({"Prvek": list(comp1.keys()), "Podíl": [v*100 for v in comp1.values()]})
+                chart = alt.Chart(df_chart).mark_arc(innerRadius=60).encode(
+                    theta="Podíl", color="Prvek", tooltip=["Prvek", "Podíl"]
+                )
+                st.altair_chart(chart)
+
+        # --- EXPORT WORD ---
         st.divider()
         st.write("### 📑 Export")
-        pdf_bytes = create_pdf(res1, formula1, comp1)
+        word_file = create_word_report(res1, formula1, comp1)
         st.download_button(
-            label="📄 Stáhnout Laboratorní Protokol (PDF)",
-            data=pdf_bytes,
-            file_name=f"HEA_Report_{formula1}.pdf",
-            mime="application/pdf"
+            label="📄 Stáhnout protokol (MS Word)",
+            data=word_file,
+            file_name=f"HEA_Report_{formula1}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 
 if __name__ == "__main__":
