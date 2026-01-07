@@ -199,20 +199,38 @@ def calculate_parameters(comp):
         "Density": density_mix, "Cost": cost_mix
     }
 
+def get_element_details(elements):
+    data = []
+    for el in elements:
+        d = ELEMENTS_DB[el]
+        data.append({
+            "Prvek": el,
+            "Poloměr (A)": d.r,
+            "VEC": d.VEC,
+            "Tm (K)": d.Tm,
+            "Hustota (g/cm3)": d.density,
+            "Cena (CZK/kg)": d.price,
+            "H_inf (kJ/mol)": d.H_inf,
+            "H_f (kJ/mol)": d.H_f
+        })
+    return pd.DataFrame(data)
+
 def get_prediction(res):
-    is_ss = (res['Omega'] >= 1.1) and (res['delta'] <= 6.6)
-    if is_ss:
-        if res['VEC'] < 6.87: struct = "BCC"
-        elif res['VEC'] >= 8.0: struct = "FCC"
-        else: struct = "BCC + FCC"
-        return f"✅ Tuhý roztok ({struct})", "success"
+    omega = res['Omega']
+    delta = res['delta']
+    
+    # Yang-Zhang kriteria pro HEA
+    if omega >= 1.1 and delta <= 6.6:
+        return "Tuhý roztok (Solid Solution) - Vysoká pravděpodobnost", "success"
+    elif 1.0 <= omega < 1.1 or 6.6 < delta <= 8.0:
+        return "Možný tuhý roztok (Nejistá oblast)", "warning"
     else:
-        return "⚠️ Intermetalické fáze", "warning"
+        return "Pravděpodobně Intermetalické fáze", "error"
 
 # =============================================================================
 # 4. EXPORT WORD (DOCX)
 # =============================================================================
-def create_word_report(res, formula, comp):
+def create_word_report(res, formula, comp, element_df):
     doc = Document()
     doc.add_heading('Laboratorní protokol - HEA Analýza', 0)
 
@@ -222,8 +240,9 @@ def create_word_report(res, formula, comp):
     p.add_run(f'Datum: ').bold = True
     p.add_run(f'{pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}')
 
-    doc.add_heading('Chemické složení', level=1)
+    doc.add_heading('1. Chemické složení', level=1)
     table = doc.add_table(rows=1, cols=2)
+    table.style = 'Table Grid'
     hdr_cells = table.rows[0].cells
     hdr_cells[0].text = 'Prvek'
     hdr_cells[1].text = 'Koncentrace (at.%)'
@@ -233,8 +252,26 @@ def create_word_report(res, formula, comp):
         row_cells[0].text = el
         row_cells[1].text = f"{val*100:.1f} %"
 
-    doc.add_heading('Vypočtené parametry', level=1)
+    doc.add_heading('2. Vstupní parametry prvků', level=1)
+    # create table for element properties
+    if not element_df.empty:
+        t2 = doc.add_table(rows=1, cols=len(element_df.columns))
+        t2.style = 'Table Grid'
+        # headers
+        for i, col_name in enumerate(element_df.columns):
+            t2.rows[0].cells[i].text = str(col_name)
+        # rows
+        for _, row_data in element_df.iterrows():
+            row_cells = t2.add_row().cells
+            for i, val in enumerate(row_data):
+                if isinstance(val, (int, float)):
+                    row_cells[i].text = f"{val:.2f}"
+                else:
+                    row_cells[i].text = str(val)
+
+    doc.add_heading('3. Vypočtené parametry slitiny', level=1)
     table_res = doc.add_table(rows=1, cols=3)
+    table_res.style = 'Table Grid'
     hdr = table_res.rows[0].cells
     hdr[0].text = 'Parametr'
     hdr[1].text = 'Hodnota'
@@ -259,7 +296,7 @@ def create_word_report(res, formula, comp):
         row[1].text = f"{val:.3f}"
         row[2].text = unit
 
-    doc.add_heading('Závěr', level=1)
+    doc.add_heading('4. Závěr', level=1)
     pred_text, _ = get_prediction(res)
     doc.add_paragraph(f"Predikce fáze: {pred_text}")
     
@@ -351,7 +388,7 @@ def main():
     mode = st.sidebar.radio("Režim:", ["Jedna slitina", "Porovnání (A/B)"])
     
     st.title("HEA Kalkulačka Expert Pro 🔬")
-    st.caption("Verze 2.2 | Word Export & Full Scientific Dashboard")
+    st.caption("Verze 2.3 | Word Export & Full Scientific Dashboard")
     
     col1, col2 = st.columns(2)
     formula1 = col1.text_input("Vzorec slitiny A:", "(TiVCr)95Ni5")
@@ -364,11 +401,16 @@ def main():
         if not comp1: return
         res1 = calculate_parameters(comp1)
         
+        # Get element data for report/UI
+        el_df1 = get_element_details(list(comp1.keys()))
+        
         res2 = None
+        el_df2 = None
         if mode == "Porovnání (A/B)" and formula2:
             comp2 = parse_formula(formula2)
             if comp2:
                 res2 = calculate_parameters(comp2)
+                el_df2 = get_element_details(list(comp2.keys()))
 
         # --- Výsledky Slitina A ---
         st.divider()
@@ -390,6 +432,9 @@ def main():
         c7.metric("H_inf (H-abs)", f"{res1['H_inf']:.2f}", "kJ/mol")
         c8.metric("Cena", f"{res1['Cost']:.0f}", "CZK/kg")
 
+        with st.expander("📝 Zobrazit vstupní parametry prvků (Slitina A)"):
+            st.dataframe(el_df1)
+
         # --- Výsledky Slitina B ---
         if res2:
             st.divider()
@@ -403,6 +448,9 @@ def main():
             c2.metric("Delta (δ)", f"{res2['delta']:.2f}", f"{res2['delta']-res1['delta']:.2f} %", delta_color="inverse")
             c3.metric("Hustota", f"{res2['Density']:.2f}", f"{res2['Density']-res1['Density']:.2f} g/cm³")
             c4.metric("Cena", f"{res2['Cost']:.0f}", f"{res2['Cost']-res1['Cost']:.0f} CZK", delta_color="inverse")
+            
+            with st.expander("📝 Zobrazit vstupní parametry prvků (Slitina B)"):
+                st.dataframe(el_df2)
             
             st.write("### ⚔️ Grafické srovnání")
             g1, g2 = st.columns(2)
@@ -443,7 +491,7 @@ def main():
         # --- EXPORT WORD ---
         st.divider()
         st.write("### 📑 Export")
-        word_file = create_word_report(res1, formula1, comp1)
+        word_file = create_word_report(res1, formula1, comp1, el_df1)
         st.download_button(
             label="📄 Stáhnout protokol (MS Word)",
             data=word_file,
