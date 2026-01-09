@@ -34,31 +34,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. DATABÁZE PRVKŮ (Zdroje: 3. AI nástroj + PDF "Complete Data Reference")
+# 2. DATABÁZE PRVKŮ 
 # =============================================================================
 @dataclass
 class ElementData:
     symbol: str
     name: str
-    [cite_start]r: float      # Poloměr (Å) [cite: 571]
-    [cite_start]vec: int      # Valenční elektrony [cite: 574]
-    [cite_start]tm: float     # Teplota tání (K) [cite: 574]
-    [cite_start]mass: float   # Atomová hmotnost (g/mol) [cite: 574]
-    [cite_start]phi: float    # Miedema Work function (V) [cite: 592]
-    [cite_start]nws: float    # Miedema Electron density (d.u.) [cite: 592]
-    [cite_start]v23: float    # Miedema Molar Volume term (cm^2) [cite: 592]
-    [cite_start]h_inf: float  # Entalpie rozpouštění H (kJ/mol H) [cite: 586]
-    [cite_start]h_f: float    # Entalpie tvorby hydridu (kJ/mol H2) [cite: 590]
+    r: float      # Poloměr (Å)
+    vec: int      # Valenční elektrony
+    tm: float     # Teplota tání (K)
+    mass: float   # Atomová hmotnost (g/mol)
+    phi: float    # Miedema Work function (V)
+    nws: float    # Miedema Electron density (d.u.)
+    v23: float    # Miedema Molar Volume term (cm^2)
+    h_inf: float  # Entalpie rozpouštění H (kJ/mol H)
+    h_f: float    # Entalpie tvorby hydridu (kJ/mol H2)
 
-# Data zkompletována z PDF "Complete Data Reference"
+# [cite_start]Data zkompletována z PDF "Complete Data Reference" [cite: 2313]
 ELEMENTS_DB = {
     # Lehké kovy
     'Al': ElementData('Al', 'Hliník', 1.43, 3, 933, 26.98, 4.20, 1.39, 4.64, 60, -6),
     'Mg': ElementData('Mg', 'Hořčík', 1.60, 2, 923, 24.31, 3.45, 1.17, 5.81, 21, -75),
-    'Si': ElementData('Si', 'Křemík', 1.17, 4, 1687, 28.09, 4.70, 1.50, 4.20, 180, 0), # h_f approx
+    'Si': ElementData('Si', 'Křemík', 1.17, 4, 1687, 28.09, 4.70, 1.50, 4.20, 180, 0), 
     
     # 4. Perioda (Transition Metals)
-    [cite_start]'Ti': ElementData('Ti', 'Titan', 1.47, 4, 1941, 47.87, 3.65, 1.47, 4.12, -52, -137), # Data [cite: 592]
+    'Ti': ElementData('Ti', 'Titan', 1.47, 4, 1941, 47.87, 3.65, 1.47, 4.12, -52, -137),
     'V':  ElementData('V', 'Vanad', 1.35, 5, 2183, 50.94, 4.25, 1.64, 4.12, -30, -47),
     'Cr': ElementData('Cr', 'Chrom', 1.29, 6, 2180, 52.00, 4.65, 1.73, 3.74, 28, 6),
     'Mn': ElementData('Mn', 'Mangan', 1.37, 7, 1519, 54.94, 4.45, 1.61, 3.78, 1, 21),
@@ -84,12 +84,11 @@ ELEMENTS_DB = {
 }
 
 # =============================================================================
-# 3. MIEDEMŮV MODEL (Jádro z "2. AI nástroje")
+# 3. MIEDEMŮV MODEL
 # =============================================================================
 def calculate_miedema_enthalpy(el1_sym, el2_sym):
     """
     Vypočítá binární entalpii míšení pomocí fyzikálního modelu.
-    [cite_start]Zdroj rovnic: [cite: 444, 445] "Vývoj miniprogramu"
     """
     e1 = ELEMENTS_DB.get(el1_sym)
     e2 = ELEMENTS_DB.get(el2_sym)
@@ -103,9 +102,6 @@ def calculate_miedema_enthalpy(el1_sym, el2_sym):
     
     # Rozdíly parametrů
     d_phi = e1.phi - e2.phi
-    d_nws = (e1.nws**(1/3)) - (e2.nws**(1/3)) # Pozn: v DB máme n_ws, zde potřebujeme n_ws^(1/3) rozdíl? 
-    # [cite_start]V "Complete Data Reference" [cite: 592] jsou hodnoty v tabulce už jako n_ws^(1/3).
-    # Zkontrolujeme: Al n_ws^(1/3) = 1.39. V kódu DB máme uloženo 1.39. Takže rozdíl bereme přímo.
     d_nws_direct = e1.nws - e2.nws
 
     # Výpočet chemické části (přitažlivá - exotermická)
@@ -114,20 +110,13 @@ def calculate_miedema_enthalpy(el1_sym, el2_sym):
     # Výpočet elastické části (odpudivá - endotermická)
     term_nws = Q * (d_nws_direct**2)
     
-    # Molar Volume factor (zjednodušený průměr)
-    # H_mix ~ V_avg * (term_phi + term_nws)
-    # V kódu DB máme v23 což je V^(2/3). Pro rovnici potřebujeme jen scaling.
-    # Pro účely srovnávací analýzy HEA stačí základní trend.
-    
-    enthalpy = (term_phi + term_nws) * 5.0 # Empirický scaling faktor pro kJ/mol
-    
-    # [cite_start]Speciální korekce pro známé anomálie (pokud chceme být super přesní podle tabulky [cite: 599])
-    # Např. Ti-Ni je -35. Náš model by měl dát něco podobného.
+    # Empirický scaling faktor pro kJ/mol
+    enthalpy = (term_phi + term_nws) * 5.0 
     
     return enthalpy
 
 # =============================================================================
-# 4. LOGIKA PARSOVÁNÍ (Z "Průběžné verze")
+# 4. LOGIKA PARSOVÁNÍ
 # =============================================================================
 def parse_composition(formula):
     """
@@ -158,8 +147,7 @@ def parse_composition(formula):
         matches = re.findall(r'([A-Z][a-z]?)(\d+(?:\.\d+)?)?', remaining_formula)
         for el, qty in matches:
             if not el: continue
-            amount = float(qty) if qty else 1.0 # Pokud chybí číslo, je to 1 (nebo zbytek, zjednodušeno)
-            # Pokud už prvek existuje (ze závorky), přičteme? Spíše se předpokládá unikátnost.
+            amount = float(qty) if qty else 1.0 
             composition[el] = amount
 
         # 3. Validace a Normalizace
@@ -181,7 +169,7 @@ def parse_composition(formula):
         return None
 
 # =============================================================================
-# 5. VÝPOČTY (Jádro "Ultimate")
+# 5. VÝPOČTY
 # =============================================================================
 def calculate_hea_properties(comp):
     elements = list(comp.keys())
@@ -203,16 +191,16 @@ def calculate_hea_properties(comp):
         for j in range(i + 1, len(elements)):
             el_i, el_j = elements[i], elements[j]
             h_ij = calculate_miedema_enthalpy(el_i, el_j)
-            h_mix += 4 * h_ij * comp[el_i] * comp[el_j] # Regular solution approximation
+            h_mix += 4 * h_ij * comp[el_i] * comp[el_j] 
             
-    # [cite_start]Atomová neshoda (Delta) [cite: 609]
+    # Atomová neshoda (Delta)
     delta_sq = sum(comp[el] * (1 - ELEMENTS_DB[el].r / r_bar)**2 for el in elements)
     delta = 100 * np.sqrt(delta_sq)
     
-    # [cite_start]Omega Parameter [cite: 609]
+    # Omega Parameter
     omega = (tm_avg * s_mix) / (abs(h_mix) * 1000) if abs(h_mix) > 1e-4 else 100.0
     
-    # [cite_start]3. Vodík (Griessen-Driessen) [cite: 456-458]
+    # 3. Vodík (Griessen-Driessen)
     h_inf_mix = sum(comp[el] * ELEMENTS_DB[el].h_inf for el in elements)
     h_f_mix = sum(comp[el] * ELEMENTS_DB[el].h_f for el in elements)
     
@@ -223,10 +211,10 @@ def calculate_hea_properties(comp):
     }
 
 # =============================================================================
-# 6. KLASIFIKACE (Logika z "2. a 3. AI nástroje")
+# 6. KLASIFIKACE 
 # =============================================================================
 def get_phase_prediction(props):
-    [cite_start]"""Predikce fáze podle VEC a termodynamiky [cite: 613, 615]"""
+    """Predikce fáze podle VEC a termodynamiky"""
     vec = props['vec']
     delta = props['delta']
     omega = props['omega']
@@ -252,7 +240,7 @@ def get_phase_prediction(props):
     return " | ".join(status)
 
 def get_hydrogen_prediction(h_f):
-    [cite_start]"""Klasifikace podle entalpie hydridu [cite: 521] z Verze 2"""
+    """Klasifikace podle entalpie hydridu"""
     if h_f < -40:
         return "🔥 Silný hydrid (Past/Trap) - Vysoká desorpční teplota", "error"
     elif -40 <= h_f <= -10:
@@ -263,17 +251,16 @@ def get_hydrogen_prediction(h_f):
         return "🛡️ Vodíková bariéra (Endotermická)", "info"
 
 # =============================================================================
-# 7. VIZUALIZACE (Matplotlib z "1. AI nástroje")
+# 7. VIZUALIZACE 
 # =============================================================================
 def plot_ashby(props, label):
     fig, ax = plt.subplots(figsize=(6, 4))
     
-    # [cite_start]Zóny stability [cite: 610]
-    # Solid Solution: Omega > 1.1, Delta < 6.6
+    # Zóny stability
     rect = patches.Rectangle((1.1, 0), 100, 6.6, linewidth=1, edgecolor='none', facecolor='#d4edda', alpha=0.5, label='Solid Solution Zone')
     ax.add_patch(rect)
     
-    # Referenční body (Hardcoded context)
+    # Referenční body
     ax.scatter([10.8], [3.2], color='gray', alpha=0.5, label='Cantor Alloy')
     ax.scatter([12.5], [4.1], color='gray', alpha=0.5)
     
@@ -282,7 +269,7 @@ def plot_ashby(props, label):
     
     ax.set_xlabel(r'Omega Parameter ($\Omega$)')
     ax.set_ylabel(r'Atomic Size Difference ($\delta$ %)')
-    ax.set_xlim(0, 20) # Zoom na relevantní oblast
+    ax.set_xlim(0, 20) 
     ax.set_ylim(0, 15)
     ax.axhline(6.6, color='black', linestyle='--', linewidth=0.8)
     ax.axvline(1.1, color='black', linestyle='--', linewidth=0.8)
@@ -293,7 +280,7 @@ def plot_ashby(props, label):
     return fig
 
 # =============================================================================
-# 8. EXPORT (Z "Průběžné verze")
+# 8. EXPORT
 # =============================================================================
 def create_word_report(comp, props, formula):
     doc = Document()
