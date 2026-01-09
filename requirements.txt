@@ -1,6 +1,5 @@
-streamlit
-pandas
-altair
-numpy
-python-docx
-matplotlib
+streamlit==1.40.0
+numpy==1.26.4
+pandas==2.2.0
+plotly==5.24.0
+python-docx==1.1.2
