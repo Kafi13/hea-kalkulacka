@@ -253,23 +253,34 @@ def main():
             with col_h2:
                 st.metric("ΔH (Hydrid)", f"{res['h_f']:.1f} kJ/mol H2")
                 
-            # Gauge chart (jednoduchý bar)
+            # Gauge chart (jednoduchý bar s přepočtem barvy předem pro vyhnutí se chybě)
             h_df = pd.DataFrame({'Val': [res['h_f']], 'Type': ['Hydrid']})
+            
+            # Určení barvy předem
+            def get_color(val):
+                if val < -40: return "red"
+                if val < -10: return "green"
+                return "orange"
+            
+            h_df['Color'] = h_df['Val'].apply(get_color)
+
             h_chart = alt.Chart(h_df).mark_bar().encode(
                 x=alt.X('Val', scale=alt.Scale(domain=[-100, 50])),
-                color=alt.condition(alt.datum.Val < -40, alt.value('red'), # Příliš silné
-                      alt.condition(alt.datum.Val < -10, alt.value('green'), # Ideál
-                      alt.value('orange'))) # Bariéra
+                color=alt.Color('Color', scale=None), # Použijeme přímou barvu
+                tooltip=['Val']
             ).properties(height=100, title="Stabilita Hydridu (Zelená = Ideální skladování)")
             st.altair_chart(h_chart, use_container_width=True)
 
         with tab3: # Rozpad entalpie (NOVÉ)
             contrib_df = pd.DataFrame(res['contributions'])
             if not contrib_df.empty:
+                # Předvýpočet barev pro stabilitu Altairu
+                contrib_df['Color'] = contrib_df['Contribution'].apply(lambda x: 'blue' if x < 0 else 'red')
+                
                 bar_chart = alt.Chart(contrib_df).mark_bar().encode(
                     y=alt.Y('Pair', sort='-x'),
                     x='Contribution',
-                    color=alt.condition(alt.datum.Contribution < 0, alt.value('blue'), alt.value('red')),
+                    color=alt.Color('Color', scale=None, legend=None),
                     tooltip=['Pair', 'H_ij', 'Contribution']
                 ).properties(title="Které prvky se 'mají rády'? (Modrá = Přitažlivost)")
                 st.altair_chart(bar_chart, use_container_width=True)
